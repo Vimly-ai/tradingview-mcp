@@ -128,14 +128,19 @@ _TRADINGVIEW_SYMBOL_ALIASES: dict = {
     "IX0001": "TWSE:IX0001",
     "TWSE:TAIEX": "TWSE:IX0001",
     "TWSE:IX0001": "TWSE:IX0001",
-    # Spot precious metals & USD index are CFDs on TradingView (screener "cfd"),
-    # not crypto/forex. Pin them to a venue that actually serves the data so a
-    # bare "gold"/"XAUUSD" request resolves correctly regardless of the exchange
-    # the caller guessed (KuCoin etc. has no XAU/XAG/DXY).
+    # Spot metals in forex-pair notation — unambiguous (no venue lists a stock or
+    # token called "XAUUSD"/"XAGUSD"), so these always map to the TVC CFD feed.
     "XAUUSD": "TVC:GOLD",
+    "XAGUSD": "TVC:SILVER",
+}
+
+# "Soft" commodity aliases: bare tickers that ALSO exist as real equities/indices
+# (e.g. NYSE:GOLD is Barrick Gold Corp). normalize_tradingview_symbol() applies
+# these ONLY when the caller is not targeting a stock exchange — so NYSE:GOLD keeps
+# resolving to the equity, while a crypto/default context maps "gold" to spot gold.
+_COMMODITY_SOFT_ALIASES: dict = {
     "GOLD": "TVC:GOLD",
     "XAU": "TVC:GOLD",
-    "XAGUSD": "TVC:SILVER",
     "SILVER": "TVC:SILVER",
     "XAG": "TVC:SILVER",
     "DXY": "TVC:DXY",
@@ -164,6 +169,10 @@ def normalize_tradingview_symbol(symbol: str, exchange: str) -> str:
         return _TRADINGVIEW_SYMBOL_ALIASES[raw]
     if ":" in raw:
         return raw
+    # Soft commodity aliases collide with real equities (NYSE:GOLD = Barrick Gold),
+    # so only apply them for non-stock venues; stock exchanges keep the literal.
+    if raw in _COMMODITY_SOFT_ALIASES and not is_stock_exchange(exchange):
+        return _COMMODITY_SOFT_ALIASES[raw]
     return f"{get_tv_exchange_prefix(exchange)}:{raw}"
 
 # Get absolute path to coinlist directory relative to this module
