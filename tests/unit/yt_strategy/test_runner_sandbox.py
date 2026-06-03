@@ -67,3 +67,29 @@ class S(Strategy):
         x = self.data.Close[-1]
 """
     scan_strategy_code(safe)
+
+
+def test_arbitrary_dict_access_blocked():
+    """__dict__ on anything other than self.data must be rejected."""
+    bad = """
+from backtesting import Strategy
+class S(Strategy):
+    def init(self): pass
+    def next(self):
+        leaked = type.__dict__
+"""
+    with pytest.raises(SecurityViolation) as exc_info:
+        scan_strategy_code(bad)
+    assert "__dict__" in str(exc_info.value)
+
+
+def test_self_data_dict_access_allowed():
+    """self.data.__dict__ is the documented carve-out and must be allowed."""
+    safe = """
+from backtesting import Strategy
+class S(Strategy):
+    def init(self): pass
+    def next(self):
+        d = self.data.__dict__
+"""
+    scan_strategy_code(safe)  # must not raise
