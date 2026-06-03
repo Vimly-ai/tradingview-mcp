@@ -340,6 +340,22 @@ Example prompt: "Compare all 9 strategies on MSFT for 2 years"
 
 ---
 
+### 🎬 YT → Backtest (Phase 1)
+
+Three tools that turn a YouTube strategy video into a walk-forward-validated backtest plus Pine v6 script:
+
+| Tool | Description |
+|------|-------------|
+| `yt_extract_strategy(url)` | Fetches transcript + returns Python and Pine v6 skeletons. |
+| `run_strategy_backtest(strategy_code, symbol, timeframe, period, slug, …)` | Runs the strategy in a sandboxed subprocess with walk-forward OOS validation and buy-and-hold benchmark; persists artifacts under `~/.tradingview_mcp_data/strategies/<slug>/`. |
+| `auto_tune_strategy(strategy_code, param_grid, symbol, timeframe, period, …)` | Deterministic grid-search over parameters; no LLM. |
+
+Strategy code runs in a hardened subprocess: AST scan rejects forbidden imports/builtins/dunder access; restricted `__builtins__`; `multiprocessing.Process` with `spawn`; `RLIMIT_AS` 1 GB cap (Linux); 60 s wall-clock timeout. See `docs/superpowers/specs/2026-06-03-yt-to-backtest-mcp-design.md` for the full security model.
+
+**Env vars:** `RUNNER_TIMEOUT_S`, `RUNNER_MEMORY_MB`, `YT_TRANSCRIPT_CACHE_TTL_H`, `STRATEGY_STORAGE_DIR`, `BINANCE_API_BASE`.
+
+---
+
 ### 💰 Yahoo Finance — Real-Time Prices *(New in v0.6.0)*
 
 | Tool | Description |
