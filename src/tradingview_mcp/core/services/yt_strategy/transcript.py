@@ -7,7 +7,8 @@ import re
 import time
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import Any
+
+import requests  # type: ignore
 
 try:
     from youtube_transcript_api import YouTubeTranscriptApi
@@ -35,7 +36,7 @@ class TranscriptUnavailable(Exception):
 
 
 _VIDEO_ID_RE = re.compile(
-    r"(?:youtube\.com/(?:watch\?(?:[^&]*&)*v=|embed/|v/)|youtu\.be/)([A-Za-z0-9_-]{11})"
+    r"(?:youtube\.com/(?:watch\?(?:[^&]*&)*v=|embed/|v/|shorts/)|youtu\.be/)([A-Za-z0-9_-]{11})"
 )
 
 
@@ -86,10 +87,30 @@ def _cache_get(video_id: str) -> TranscriptResult | None:
 
 def _cache_set(result: TranscriptResult) -> None:
     path = _cache_dir() / f"{result.video_id}.json"
+    tmp = path.with_suffix(".json.tmp")
     try:
-        path.write_text(json.dumps(asdict(result)))
+        tmp.write_text(json.dumps(asdict(result)))
+        tmp.replace(path)  # atomic rename on POSIX
     except OSError:  # disk full, permission denied — silent best-effort
-        pass
+        tmp.unlink(missing_ok=True)
+
+
+def _parse_vtt(vtt: str) -> str:
+    """Extract spoken text from a WebVTT subtitle blob, deduping consecutive repeats."""
+    lines: list[str] = []
+    for line in vtt.splitlines():
+        line = line.strip()
+        if not line or line.startswith("WEBVTT") or "-->" in line or line.isdigit():
+            continue
+        line = re.sub(r"<[^>]+>", "", line).strip()
+        if not line:
+            continue
+        # YouTube auto-captions repeat lines across overlapping cues; skip
+        # consecutive duplicates to keep the transcript readable.
+        if lines and lines[-1] == line:
+            continue
+        lines.append(line)
+    return " ".join(lines)
 
 
 def _fetch_via_api(video_id: str) -> TranscriptResult:
@@ -141,21 +162,9 @@ def _fetch_via_ytdlp(video_id: str) -> TranscriptResult:
     if not track or not track.get("url"):
         raise TranscriptUnavailable(f"No English auto-captions for video {video_id}")
 
-    import requests  # type: ignore
-
     resp = requests.get(track["url"], timeout=20)
     resp.raise_for_status()
-    vtt = resp.text
-    # Strip VTT headers and timing lines; keep only spoken text.
-    text_lines = []
-    for line in vtt.splitlines():
-        line = line.strip()
-        if not line or line.startswith("WEBVTT") or "-->" in line or line.isdigit():
-            continue
-        # remove inline tags like <c.colorname>
-        line = re.sub(r"<[^>]+>", "", line)
-        text_lines.append(line)
-    text = " ".join(text_lines)
+    text = _parse_vtt(resp.text)
 
     return TranscriptResult(
         text=text,

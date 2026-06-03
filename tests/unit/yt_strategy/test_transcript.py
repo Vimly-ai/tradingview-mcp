@@ -13,6 +13,7 @@ from tradingview_mcp.core.services.yt_strategy.transcript import (
     TranscriptUnavailable,
     fetch_transcript,
     extract_video_id,
+    _parse_vtt,
 )
 
 
@@ -32,6 +33,12 @@ class TestExtractVideoId:
     def test_invalid_url_raises(self):
         with pytest.raises(ValueError, match="Not a valid YouTube URL"):
             extract_video_id("https://vimeo.com/12345")
+
+    def test_shorts_url(self):
+        assert extract_video_id("https://www.youtube.com/shorts/dQw4w9WgXcQ") == "dQw4w9WgXcQ"
+
+    def test_short_url_with_si_param(self):
+        assert extract_video_id("https://youtu.be/dQw4w9WgXcQ?si=abc123def") == "dQw4w9WgXcQ"
 
 
 class TestFetchTranscript:
@@ -97,3 +104,23 @@ class TestFetchTranscript:
         mock_ytdlp.side_effect = Exception("ytdlp blocked too")
         with pytest.raises(TranscriptUnavailable):
             fetch_transcript("https://youtu.be/dQw4w9WgXcQ")
+
+
+class TestParseVtt:
+    def test_dedupes_consecutive_repeats(self):
+        vtt = (
+            "WEBVTT\n\n"
+            "00:00:00.000 --> 00:00:02.000\nhello world\n\n"
+            "00:00:01.000 --> 00:00:03.000\nhello world\n\n"
+            "00:00:02.000 --> 00:00:04.000\nthis is new\n\n"
+        )
+        result = _parse_vtt(vtt)
+        assert result.count("hello world") == 1
+        assert "this is new" in result
+
+    def test_strips_inline_tags(self):
+        vtt = "WEBVTT\n\n00:00:00.000 --> 00:00:02.000\n<c.color>hello</c> world\n"
+        assert _parse_vtt(vtt) == "hello world"
+
+    def test_empty_vtt(self):
+        assert _parse_vtt("WEBVTT\n\n") == ""
