@@ -5,6 +5,7 @@ A failure here is a sandbox regression - treat as a P0.
 """
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -135,6 +136,11 @@ class S(Strategy):
         exec_strategy_in_subprocess(code, df, cash=10_000, commission=0.001)
 
 
+@pytest.mark.skipif(
+    sys.platform == "darwin",
+    reason="RLIMIT_AS is not enforced on macOS; memory cap depends on Linux. "
+           "Test passes on the Linux CI runner.",
+)
 def test_exec_strategy_memory_exceeded(monkeypatch):
     # Use a tight cap to force the trip.
     monkeypatch.setenv("RUNNER_MEMORY_MB", "100")
