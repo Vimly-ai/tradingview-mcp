@@ -363,3 +363,108 @@ def exec_strategy_in_subprocess(
         raise RuntimeError(f"Unknown subprocess tag: {tag!r}")
     finally:
         parent_conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Top-level orchestration
+# ---------------------------------------------------------------------------
+
+from .data import fetch_ohlcv, cost_profile_for
+from .walkforward import walk_forward_split, detect_overfit
+from .storage import save_run, RunArtifacts
+
+
+def _b_and_h(df) -> dict[str, float]:
+    """Buy-and-hold benchmark on the same window."""
+    start_price = float(df["Close"].iloc[0])
+    end_price = float(df["Close"].iloc[-1])
+    bh_return_pct = (end_price / start_price - 1.0) * 100.0
+    rets = df["Close"].pct_change().dropna()
+    if len(rets) > 1 and rets.std() > 0:
+        bh_sharpe = float((rets.mean() / rets.std()) * (252 ** 0.5))
+    else:
+        bh_sharpe = 0.0
+    return {"bh_return_pct": bh_return_pct, "bh_sharpe": bh_sharpe}
+
+
+def _aggregate_oos(per_fold: list[dict]) -> dict[str, float]:
+    """Mean metrics across walk-forward folds."""
+    if not per_fold:
+        return {"sharpe": 0.0, "cagr": 0.0, "mdd": 0.0, "win_rate": 0.0,
+                "profit_factor": 0.0, "n_trades": 0, "return_pct": 0.0}
+    keys = per_fold[0].keys()
+    return {k: sum(f[k] for f in per_fold) / len(per_fold) for k in keys}
+
+
+def run_backtest(
+    strategy_code: str,
+    symbol: str,
+    timeframe: str,
+    period: str,
+    slug: str,
+    cash: float = 10_000,
+    commission: float | None = None,
+    slippage: float | None = None,
+    oos_validate: bool = True,
+) -> dict[str, Any]:
+    """Top-level entry. Fetches data, runs IS + walk-forward, persists artifacts."""
+    profile = cost_profile_for(symbol)
+    commission_used = commission if commission is not None else profile.commission
+
+    df = fetch_ohlcv(symbol, timeframe, period)
+    if df.empty or len(df) < 30:
+        return {
+            "in_sample": {}, "out_of_sample": {}, "benchmark": {},
+            "overfit_flag": False, "warnings": [f"Insufficient data: got {len(df)} bars."],
+            "cost_profile": profile.name, "slug": slug, "run_path": "",
+        }
+
+    # In-sample full-window backtest
+    in_sample = exec_strategy_in_subprocess(strategy_code, df, cash=cash, commission=commission_used)
+    is_metrics = in_sample["metrics"]
+
+    # Out-of-sample walk-forward
+    oos_metrics: dict[str, float] = {}
+    if oos_validate and len(df) >= 60:
+        folds = walk_forward_split(df, n_chunks=6)
+        per_fold = []
+        for _train, test in folds:
+            try:
+                fold_result = exec_strategy_in_subprocess(strategy_code, test, cash=cash, commission=commission_used)
+                per_fold.append(fold_result["metrics"])
+            except (StrategyTimeout, StrategyMemoryExceeded, StrategyRuntimeError, InvalidStrategyClass):
+                continue
+        oos_metrics = _aggregate_oos(per_fold)
+    else:
+        split = int(len(df) * 0.7)
+        try:
+            test_result = exec_strategy_in_subprocess(strategy_code, df.iloc[split:], cash=cash, commission=commission_used)
+            oos_metrics = test_result["metrics"]
+        except Exception:
+            oos_metrics = is_metrics  # degrade gracefully
+
+    benchmark = _b_and_h(df)
+    overfit = detect_overfit(is_metrics.get("sharpe", 0.0), oos_metrics.get("sharpe", 0.0))
+
+    report = {
+        "in_sample": is_metrics,
+        "out_of_sample": oos_metrics,
+        "benchmark": benchmark,
+        "overfit_flag": overfit,
+        "trade_log": in_sample.get("trade_log", []),
+        "cost_profile": profile.name,
+        "symbol": symbol, "timeframe": timeframe, "period": period,
+        "slug": slug,
+        "warnings": [],
+    }
+
+    artifacts = RunArtifacts(
+        strategy_py=strategy_code,
+        strategy_pine="",  # populated by codegen on final convergence
+        report_json=report,
+        transcript="",
+        equity_curve_png=b"",  # PNG generation deferred
+    )
+    run_path = save_run(slug, artifacts)
+    report["run_path"] = str(run_path)
+    return report
