@@ -19,6 +19,14 @@ dependencies = [
   "requests>=2.32",
   "tradingview-screener>=0.6.4",
   "tradingview-ta>=3.3.0",
+  "backtesting>=0.3.3",
+  "youtube-transcript-api>=0.6.2",
+  "yt-dlp>=2025.01.01",
+  "ta>=0.11.0",
+  "scikit-optimize>=0.10.0",
+  "Pillow>=10",
+  "pandas>=2.0",
+  "numpy>=1.24",
 ]
 
 [project.scripts]
@@ -34,6 +42,9 @@ tradingview_mcp = ["coinlist/*.txt"]
 [tool.uv]
 dev-dependencies = [
     "pytest>=9.0.3",
+    "pytest-mock>=3.12",
+    "requests-mock>=1.12",
+    "pytest-timeout>=2.3",
 ]
 package = true
 
