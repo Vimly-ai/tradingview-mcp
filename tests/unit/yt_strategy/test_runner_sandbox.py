@@ -93,3 +93,69 @@ class S(Strategy):
         d = self.data.__dict__
 """
     scan_strategy_code(safe)  # must not raise
+
+
+# --- subprocess exec tests ---
+
+from tradingview_mcp.core.services.yt_strategy.runner import (
+    StrategyTimeout,
+    StrategyMemoryExceeded,
+    InvalidStrategyClass,
+    exec_strategy_in_subprocess,
+)
+import pandas as pd
+
+FIXTURE_CSV = Path(__file__).resolve().parents[2] / "fixtures" / "synthetic_ohlcv.csv"
+
+
+def _fixture_df():
+    return pd.read_csv(FIXTURE_CSV, parse_dates=["Date"], index_col="Date")
+
+
+def test_exec_strategy_runs_benign():
+    code = (Path(__file__).resolve().parents[2] / "fixtures" / "strategies" / "sma_cross.py").read_text()
+    df = _fixture_df()
+    result = exec_strategy_in_subprocess(code, df, cash=10_000, commission=0.001)
+    assert "metrics" in result
+    assert "n_trades" in result["metrics"]
+
+
+def test_exec_strategy_times_out(monkeypatch):
+    monkeypatch.setenv("RUNNER_TIMEOUT_S", "2")
+    code = """
+from backtesting import Strategy
+class S(Strategy):
+    def init(self): pass
+    def next(self):
+        while True:
+            pass
+"""
+    df = _fixture_df()
+    with pytest.raises(StrategyTimeout):
+        exec_strategy_in_subprocess(code, df, cash=10_000, commission=0.001)
+
+
+def test_exec_strategy_memory_exceeded(monkeypatch):
+    # Use a tight cap to force the trip.
+    monkeypatch.setenv("RUNNER_MEMORY_MB", "100")
+    code = """
+from backtesting import Strategy
+class S(Strategy):
+    def init(self):
+        self.junk = [0] * (50 * 1000 * 1000)  # ~400MB
+    def next(self): pass
+"""
+    df = _fixture_df()
+    with pytest.raises((StrategyMemoryExceeded, MemoryError)):
+        exec_strategy_in_subprocess(code, df, cash=10_000, commission=0.001)
+
+
+def test_exec_strategy_no_class():
+    code = """
+from backtesting import Strategy
+# no class defined
+x = 1
+"""
+    df = _fixture_df()
+    with pytest.raises(InvalidStrategyClass):
+        exec_strategy_in_subprocess(code, df, cash=10_000, commission=0.001)
