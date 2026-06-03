@@ -69,6 +69,7 @@ from tradingview_mcp.core.errors import (
     BatchExecutionError,
     ErrorCode,
     make_error,
+    make_strategy_error,
 )
 
 try:
@@ -810,6 +811,158 @@ def stock_options_unusual_activity(
           strike_vs_spot_pct (moneyness)}
     """
     return get_unusual_options_activity(symbol, top_n, min_volume, expiries)
+
+
+# ---------------------------------------------------------------------------
+# YT → backtest MCP tools (Phase 1)
+# ---------------------------------------------------------------------------
+
+from tradingview_mcp.core.services.yt_strategy.transcript import (
+    fetch_transcript, TranscriptUnavailable,
+)
+from tradingview_mcp.core.services.yt_strategy.rule_extractor import extract_rules
+from tradingview_mcp.core.services.yt_strategy.codegen import (
+    python_template, pine_template,
+)
+from tradingview_mcp.core.services.yt_strategy.runner import (
+    run_backtest as _yt_run_backtest,
+    SecurityViolation, StrategyTimeout, StrategyMemoryExceeded,
+    InvalidStrategyClass, StrategyRuntimeError,
+)
+from tradingview_mcp.core.services.yt_strategy.autotune import auto_tune
+
+
+@mcp.tool()
+def yt_extract_strategy(url: str) -> dict:
+    """Fetch a YouTube transcript and return Python+Pine skeleton templates.
+
+    Args:
+        url: YouTube video URL (watch / youtu.be / embed form).
+    """
+    try:
+        result = fetch_transcript(url)
+    except ValueError as e:
+        return make_error(ErrorCode.INVALID_PARAMETER, str(e))
+    except TranscriptUnavailable as e:
+        return make_error(ErrorCode.TRANSCRIPT_UNAVAILABLE, str(e))
+
+    spec = extract_rules(result.text)
+    return {
+        "transcript": result.text,
+        "video_meta": {
+            "video_id": result.video_id,
+            "title": result.title,
+            "channel": result.channel,
+            "duration_s": result.duration_s,
+            "language": result.language,
+            "source": result.source,
+        },
+        "python_skeleton": python_template(spec),
+        "pine_skeleton": pine_template(spec),
+        "spec": {
+            "name": spec.name,
+            "entry_rules": spec.entry_rules,
+            "exit_rules": spec.exit_rules,
+            "indicators_used": spec.indicators_used,
+            "confidence": spec.confidence,
+        },
+    }
+
+
+@mcp.tool()
+def run_strategy_backtest(
+    strategy_code: str,
+    symbol: str,
+    timeframe: str,
+    period: str,
+    slug: str,
+    cash: float = 10_000,
+    commission: Optional[float] = None,
+    slippage: Optional[float] = None,
+    oos_validate: bool = True,
+) -> dict:
+    """Backtest LLM-generated strategy_code with walk-forward OOS validation.
+
+    Args:
+        strategy_code: Full Python source defining a subclass of backtesting.Strategy.
+        symbol: e.g. "BTCUSDT" (Binance) or "AAPL" / "BTC-USD" (Yahoo).
+        timeframe: e.g. "1h", "1d".
+        period: e.g. "2y", "60d".
+        slug: Filesystem-safe identifier under which artifacts are persisted.
+        cash: Starting equity. Default 10,000.
+        commission: Per-trade commission as a fraction. Default = asset-class profile.
+        slippage: Per-trade slippage (reserved; not yet wired through).
+        oos_validate: When True (default), runs 5-fold expanding walk-forward.
+    """
+    try:
+        return _yt_run_backtest(
+            strategy_code=strategy_code, symbol=symbol, timeframe=timeframe,
+            period=period, slug=slug, cash=cash, commission=commission,
+            slippage=slippage, oos_validate=oos_validate,
+        )
+    except SecurityViolation as e:
+        return make_strategy_error(
+            ErrorCode.STRATEGY_SECURITY_VIOLATION, str(e),
+            user_code_line=e.line, user_code_snippet=e.snippet,
+        )
+    except SyntaxError as e:
+        return make_strategy_error(
+            ErrorCode.STRATEGY_RUNTIME_ERROR, f"SyntaxError: {e.msg}",
+            user_code_line=e.lineno,
+            user_code_snippet=e.text.rstrip() if e.text else None,
+        )
+    except StrategyTimeout as e:
+        return make_strategy_error(ErrorCode.STRATEGY_TIMEOUT, str(e))
+    except StrategyMemoryExceeded as e:
+        return make_strategy_error(ErrorCode.STRATEGY_MEMORY_EXCEEDED, str(e))
+    except InvalidStrategyClass as e:
+        return make_strategy_error(ErrorCode.STRATEGY_INVALID_CLASS, str(e))
+    except StrategyRuntimeError as e:
+        return make_strategy_error(
+            ErrorCode.STRATEGY_RUNTIME_ERROR, str(e),
+            user_code_line=e.user_code_line,
+            user_code_snippet=e.user_code_snippet,
+        )
+    except ValueError as e:
+        return make_error(ErrorCode.INVALID_PARAMETER, str(e))
+
+
+@mcp.tool()
+def auto_tune_strategy(
+    strategy_code: str,
+    param_grid: dict,
+    symbol: str,
+    timeframe: str,
+    period: str,
+    metric: str = "Sharpe Ratio",
+    method: str = "grid",
+    max_tries: int = 50,
+) -> dict:
+    """Sweep param_grid against strategy_code and return the best params.
+
+    No LLM. Deterministic grid search inside a sandboxed subprocess.
+
+    Args:
+        strategy_code: Full strategy source (same shape as run_strategy_backtest).
+        param_grid: {param_name: [values]}. Cartesian product is swept.
+        symbol, timeframe, period: market window.
+        metric: backtesting.py stat name to maximize. Default "Sharpe Ratio".
+        method: "grid" (only supported value at MVP).
+        max_tries: cap on number of param combinations explored.
+    """
+    try:
+        return auto_tune(
+            strategy_code=strategy_code, param_grid=param_grid, symbol=symbol,
+            timeframe=timeframe, period=period, metric=metric, method=method,
+            max_tries=max_tries,
+        )
+    except SecurityViolation as e:
+        return make_strategy_error(
+            ErrorCode.STRATEGY_SECURITY_VIOLATION, str(e),
+            user_code_line=e.line, user_code_snippet=e.snippet,
+        )
+    except ValueError as e:
+        return make_error(ErrorCode.INVALID_PARAMETER, str(e))
 
 
 # ── Resource ───────────────────────────────────────────────────────────────────
