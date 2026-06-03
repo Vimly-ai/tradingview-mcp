@@ -53,6 +53,17 @@ class ErrorCode(str, Enum):
     DEPENDENCY_MISSING = "DEPENDENCY_MISSING"
     INTERNAL_ERROR = "INTERNAL_ERROR"
 
+    # Strategy code (LLM-generated user code) errors
+    STRATEGY_SECURITY_VIOLATION = "STRATEGY_SECURITY_VIOLATION"
+    STRATEGY_TIMEOUT = "STRATEGY_TIMEOUT"
+    STRATEGY_MEMORY_EXCEEDED = "STRATEGY_MEMORY_EXCEEDED"
+    STRATEGY_NO_TRADES = "STRATEGY_NO_TRADES"
+    STRATEGY_INVALID_CLASS = "STRATEGY_INVALID_CLASS"
+    STRATEGY_RUNTIME_ERROR = "STRATEGY_RUNTIME_ERROR"
+
+    # YouTube / transcript
+    TRANSCRIPT_UNAVAILABLE = "TRANSCRIPT_UNAVAILABLE"
+
 
 def make_error(code: Union[ErrorCode, str], message: str, **extra: Any) -> dict[str, Any]:
     """Construct a structured error envelope.
@@ -118,3 +129,56 @@ class BatchExecutionError(Exception):
         self.batches_attempted = batches_attempted
         self.batches_failed = batches_failed
         self.first_error = first_error
+
+
+_STRATEGY_DEFAULT_HINTS: dict[str, str] = {
+    "STRATEGY_TIMEOUT": (
+        "Strategy did not converge within the wall-clock limit. Check for "
+        "infinite loops or O(n^2) logic over bar history."
+    ),
+    "STRATEGY_MEMORY_EXCEEDED": (
+        "Strategy used more memory than allowed. Avoid storing per-bar arrays; "
+        "use self.data slicing instead."
+    ),
+    "STRATEGY_NO_TRADES": (
+        "Strategy produced 0 trades. Entry/exit conditions may never both fire. "
+        "Check signal logic and indicator initialization."
+    ),
+    "STRATEGY_INVALID_CLASS": (
+        "Code must define a class subclassing backtesting.Strategy."
+    ),
+    "STRATEGY_SECURITY_VIOLATION": (
+        "Code referenced a forbidden name. Only 'backtesting', 'pandas', "
+        "'numpy', 'ta', 'math', 'statistics' are available."
+    ),
+    "STRATEGY_RUNTIME_ERROR": (
+        "Strategy raised a runtime exception. See user_code_line and "
+        "user_code_snippet for the failure location."
+    ),
+}
+
+
+def make_strategy_error(
+    code: ErrorCode | str,
+    message: str,
+    user_code_line: int | None = None,
+    user_code_snippet: str | None = None,
+    hint: str | None = None,
+    **extra: Any,
+) -> dict[str, Any]:
+    """Construct a strategy-error envelope with the canonical fields.
+
+    Adds ``error_type="strategy"`` to the inner dict so the assistant can
+    branch on category without parsing the code. Fills in a default hint
+    when none is supplied.
+    """
+    code_str = code.value if isinstance(code, ErrorCode) else str(code)
+    return make_error(
+        code,
+        message,
+        error_type="strategy",
+        user_code_line=user_code_line,
+        user_code_snippet=user_code_snippet,
+        hint=hint if hint is not None else _STRATEGY_DEFAULT_HINTS.get(code_str, ""),
+        **extra,
+    )
