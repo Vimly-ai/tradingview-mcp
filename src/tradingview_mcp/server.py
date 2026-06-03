@@ -961,6 +961,10 @@ def auto_tune_strategy(
             ErrorCode.STRATEGY_SECURITY_VIOLATION, str(e),
             user_code_line=e.line, user_code_snippet=e.snippet,
         )
+    except TimeoutError as e:
+        return make_strategy_error(ErrorCode.STRATEGY_TIMEOUT, str(e))
+    except RuntimeError as e:
+        return make_strategy_error(ErrorCode.STRATEGY_RUNTIME_ERROR, str(e))
     except ValueError as e:
         return make_error(ErrorCode.INVALID_PARAMETER, str(e))
 

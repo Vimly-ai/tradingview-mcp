@@ -193,8 +193,11 @@ def fetch_ohlcv(symbol: str, timeframe: str, period: str, *, strict_period: bool
     if src == "fixture":
         return _fetch_fixture(symbol)
     validate_timeframe(symbol, timeframe)
-    effective_period, _warning = clamp_period(symbol, timeframe, period, strict=strict_period)
+    effective_period, warning = clamp_period(symbol, timeframe, period, strict=strict_period)
 
     if src == "binance":
         return _fetch_binance(symbol, timeframe)
-    return _fetch_yahoo(symbol, timeframe, effective_period)
+    result = _fetch_yahoo(symbol, timeframe, effective_period)
+    if warning:
+        result.attrs["clamp_warning"] = warning
+    return result

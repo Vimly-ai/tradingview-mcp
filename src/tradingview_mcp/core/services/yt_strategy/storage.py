@@ -3,9 +3,29 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+
+_SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def _validate_slug(slug: str) -> str:
+    """Ensure *slug* is a safe filesystem name with no path separators.
+
+    Raises ValueError on traversal patterns or empty input.
+    """
+    if not slug or slug in (".", ".."):
+        raise ValueError(f"Invalid slug {slug!r}: must be a non-empty identifier.")
+    if "/" in slug or "\\" in slug or ".." in slug:
+        raise ValueError(f"Invalid slug {slug!r}: must not contain path separators or '..'.")
+    if not _SLUG_RE.match(slug):
+        raise ValueError(
+            f"Invalid slug {slug!r}: must start with alphanumeric and contain only [A-Za-z0-9._-]."
+        )
+    return slug
 
 
 @dataclass
@@ -28,6 +48,7 @@ def _storage_dir() -> Path:
 
 def save_run(slug: str, artifacts: RunArtifacts) -> Path:
     """Persist *artifacts* under storage/<slug>/. Returns the dir path."""
+    _validate_slug(slug)
     d = _storage_dir() / slug
     d.mkdir(parents=True, exist_ok=True)
     (d / "strategy.py").write_text(artifacts.strategy_py)
@@ -40,6 +61,7 @@ def save_run(slug: str, artifacts: RunArtifacts) -> Path:
 
 
 def load_run(slug: str) -> RunArtifacts:
+    _validate_slug(slug)
     d = _storage_dir() / slug
     if not d.exists():
         raise FileNotFoundError(f"No run at slug {slug!r}")

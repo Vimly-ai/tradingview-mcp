@@ -41,3 +41,25 @@ def test_save_run_overwrites(tmp_path, monkeypatch):
     save_run("X-1h-iter1", RunArtifacts("v2", "v2", {"sharpe": 2.0}, "", b""))
     loaded = load_run("X-1h-iter1")
     assert loaded.strategy_py == "v2"
+
+
+def test_save_run_rejects_path_traversal(tmp_path, monkeypatch):
+    monkeypatch.setenv("STRATEGY_STORAGE_DIR", str(tmp_path))
+    arts = RunArtifacts("a", "a", {}, "", b"")
+    for bad_slug in (
+        "../escape",
+        "../../etc",
+        "/abs/path",
+        "foo/bar",
+        r"foo\bar",
+        "..",
+        ".",
+    ):
+        with pytest.raises(ValueError, match="slug"):
+            save_run(bad_slug, arts)
+
+
+def test_load_run_rejects_path_traversal(tmp_path, monkeypatch):
+    monkeypatch.setenv("STRATEGY_STORAGE_DIR", str(tmp_path))
+    with pytest.raises(ValueError, match="slug"):
+        load_run("../escape")

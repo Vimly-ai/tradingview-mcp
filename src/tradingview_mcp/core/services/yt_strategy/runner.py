@@ -101,6 +101,15 @@ class _ScanVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_Call(self, node: ast.Call) -> None:
+        # NOTE on residual risk: this catches only string-literal dunder
+        # arguments (ast.Constant). Dynamically constructed strings such as
+        # getattr(x, "__cl" + "ass__") or getattr(x, f"__{'class'}__")
+        # cannot be statically rejected here — the AST only sees a BinOp
+        # or JoinedStr. Defense-in-depth covers this: the restricted
+        # __builtins__ in _safe_builtins strips reflective helpers, the
+        # spawned subprocess is isolated, and the wall-clock + memory
+        # caps bound any escalation. Adding runtime guards inside the
+        # exec'd code is intentionally avoided to keep layers separable.
         # getattr/setattr/delattr/hasattr with dunder string -> reject
         func = node.func
         is_reflective = (
@@ -412,10 +421,13 @@ def run_backtest(
     commission_used = commission if commission is not None else profile.commission
 
     df = fetch_ohlcv(symbol, timeframe, period)
+    cw = df.attrs.get("clamp_warning") if hasattr(df, "attrs") else None
+    initial_warnings: list[str] = [cw] if cw else []
+
     if df.empty or len(df) < 30:
         return {
             "in_sample": {}, "out_of_sample": {}, "benchmark": {},
-            "overfit_flag": False, "warnings": [f"Insufficient data: got {len(df)} bars."],
+            "overfit_flag": False, "warnings": initial_warnings + [f"Insufficient data: got {len(df)} bars."],
             "cost_profile": profile.name, "slug": slug, "run_path": "",
         }
 
@@ -425,6 +437,8 @@ def run_backtest(
 
     # Out-of-sample walk-forward
     oos_metrics: dict[str, float] = {}
+    oos_failed = False
+    warnings: list[str] = list(initial_warnings)
     if oos_validate and len(df) >= 60:
         folds = walk_forward_split(df, n_chunks=6)
         per_fold = []
@@ -434,7 +448,12 @@ def run_backtest(
                 per_fold.append(fold_result["metrics"])
             except (StrategyTimeout, StrategyMemoryExceeded, StrategyRuntimeError, InvalidStrategyClass):
                 continue
-        oos_metrics = _aggregate_oos(per_fold)
+        if per_fold:
+            oos_metrics = _aggregate_oos(per_fold)
+        else:
+            oos_metrics = _aggregate_oos([])  # zeros
+            oos_failed = True
+            warnings.append("All walk-forward folds failed; out-of-sample metrics not computed.")
     else:
         split = int(len(df) * 0.7)
         try:
@@ -442,9 +461,10 @@ def run_backtest(
             oos_metrics = test_result["metrics"]
         except Exception:
             oos_metrics = is_metrics  # degrade gracefully
+            warnings.append("Simple OOS split failed; falling back to in-sample metrics.")
 
     benchmark = _b_and_h(df)
-    overfit = detect_overfit(is_metrics.get("sharpe", 0.0), oos_metrics.get("sharpe", 0.0))
+    overfit = False if oos_failed else detect_overfit(is_metrics.get("sharpe", 0.0), oos_metrics.get("sharpe", 0.0))
 
     report = {
         "in_sample": is_metrics,
@@ -455,7 +475,7 @@ def run_backtest(
         "cost_profile": profile.name,
         "symbol": symbol, "timeframe": timeframe, "period": period,
         "slug": slug,
-        "warnings": [],
+        "warnings": warnings,
     }
 
     artifacts = RunArtifacts(
