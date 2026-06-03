@@ -138,7 +138,6 @@ def scan_strategy_code(code: str) -> None:
 import multiprocessing as _mp
 import os as _os
 import pickle as _pickle
-import sys as _sys
 import traceback as _tb
 from typing import Any
 
@@ -267,19 +266,33 @@ def _child_target(code: str, df_pickle: bytes, cash: float, commission: float, c
     except MemoryError:
         conn.send(("memory", None))
     except Exception as e:
-        tb_lines = _tb.format_exception(type(e), e, e.__traceback__)
-        line = None
-        for frame in _tb.extract_tb(e.__traceback__):
-            if frame.filename == "<strategy>":
-                line = frame.lineno
-                break
-        snippet = _line_snippet(code, line)
-        conn.send(("runtime", {
-            "message": str(e),
-            "line": line,
-            "snippet": snippet,
-            "traceback": "".join(tb_lines),
-        }))
+        try:
+            tb_lines = _tb.format_exception(type(e), e, e.__traceback__)
+            line = None
+            for frame in _tb.extract_tb(e.__traceback__):
+                if frame.filename == "<strategy>":
+                    line = frame.lineno
+                    break
+            snippet = _line_snippet(code, line)
+            conn.send(("runtime", {
+                "message": str(e),
+                "line": line,
+                "snippet": snippet,
+                "traceback": "".join(tb_lines),
+            }))
+        except Exception:
+            # Reporting itself failed (broken traceback, codec error, ...).
+            # Send a minimal envelope so the parent doesn't misclassify as
+            # memory-exceeded.
+            try:
+                conn.send(("runtime", {
+                    "message": repr(e),
+                    "line": None,
+                    "snippet": None,
+                    "traceback": "",
+                }))
+            except Exception:
+                pass  # nothing more we can do; finally will close pipe
     finally:
         conn.close()
 
@@ -314,34 +327,39 @@ def exec_strategy_in_subprocess(
         args=(strategy_code, df_pickle, cash, commission, child_conn),
     )
     proc.start()
+    child_conn.close()  # parent no longer needs the child end
     proc.join(timeout=_runner_timeout_s())
     if proc.is_alive():
         proc.kill()
         proc.join(timeout=2)
+        parent_conn.close()
         raise StrategyTimeout(
             f"Strategy did not finish within {_runner_timeout_s():.0f}s wall-clock."
         )
 
-    if not parent_conn.poll():
-        # Subprocess died without sending — likely killed by OS for memory.
-        raise StrategyMemoryExceeded(
-            "Strategy subprocess terminated without result; "
-            "likely killed for exceeding memory cap."
-        )
+    try:
+        if not parent_conn.poll():
+            # Subprocess died without sending — likely killed by OS for memory.
+            raise StrategyMemoryExceeded(
+                "Strategy subprocess terminated without result; "
+                "likely killed for exceeding memory cap."
+            )
 
-    tag, payload = parent_conn.recv()
-    if tag == "ok":
-        return payload
-    if tag == "invalid_class":
-        raise InvalidStrategyClass(
-            "No subclass of backtesting.Strategy defined in submitted code."
-        )
-    if tag == "memory":
-        raise StrategyMemoryExceeded("Strategy hit MemoryError during execution.")
-    if tag == "runtime":
-        raise StrategyRuntimeError(
-            payload["message"],
-            user_code_line=payload["line"],
-            user_code_snippet=payload["snippet"],
-        )
-    raise RuntimeError(f"Unknown subprocess tag: {tag!r}")
+        tag, payload = parent_conn.recv()
+        if tag == "ok":
+            return payload
+        if tag == "invalid_class":
+            raise InvalidStrategyClass(
+                "No subclass of backtesting.Strategy defined in submitted code."
+            )
+        if tag == "memory":
+            raise StrategyMemoryExceeded("Strategy hit MemoryError during execution.")
+        if tag == "runtime":
+            raise StrategyRuntimeError(
+                payload["message"],
+                user_code_line=payload["line"],
+                user_code_snippet=payload["snippet"],
+            )
+        raise RuntimeError(f"Unknown subprocess tag: {tag!r}")
+    finally:
+        parent_conn.close()
