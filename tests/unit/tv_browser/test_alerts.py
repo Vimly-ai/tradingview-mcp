@@ -58,6 +58,18 @@ async def test_create_alert_accepts_iso8601_expires():
     assert result["expires"] == "2026-12-31T23:59:00Z"
 
 
+async def test_create_alert_warns_when_direction_not_default():
+    page = _page()
+    result = await create_alert(page, "BTCUSDT", price=60000, direction="crossing_up")
+    assert any("direction" in w for w in result["warnings"])
+
+
+async def test_create_alert_warns_when_expires_set():
+    page = _page()
+    result = await create_alert(page, "BTCUSDT", price=60000, expires="2026-12-31T23:59:00Z")
+    assert any("expires" in w for w in result["warnings"])
+
+
 async def test_delete_alert_navigates_and_clicks():
     page = _page()
     page.evaluate = AsyncMock(return_value=True)

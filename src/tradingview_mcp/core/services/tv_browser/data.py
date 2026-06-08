@@ -45,13 +45,19 @@ _INDICATORS_EXTRACT_JS = """
 
 
 async def read_watchlist(page: Any, name: str | None = None) -> dict:
+    warnings: list[str] = []
+    if name is not None:
+        warnings.append(
+            f"name={name!r} requested but watchlist-switching DOM selector "
+            f"not yet wired; returning currently-visible watchlist."
+        )
     rows = await page.evaluate(_WATCHLIST_EXTRACT_JS)
     if not isinstance(rows, list):
         raise TVDOMShapeChanged("watchlist rows extraction returned non-list", panel="watchlist")
     return {
         "name": name or "current",
         "rows": rows,
-        "warnings": [],
+        "warnings": warnings,
     }
 
 

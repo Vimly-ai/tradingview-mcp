@@ -62,6 +62,11 @@ async def test_add_indicator_opens_dialog(tmp_path, monkeypatch):
     monkeypatch.setenv("STRATEGY_STORAGE_DIR", str(tmp_path))
     page, locator = _page()
     await add_indicator(page, "RSI")
+    # The open button must be clicked BEFORE fill
+    assert any(
+        call.args[0] == selectors.INDICATOR_DIALOG_OPEN_BTN
+        for call in page.click.call_args_list
+    ), "add_indicator must click the dialog-open button before filling search"
     page.fill.assert_called_once()
     fill_args = page.fill.call_args.args
     assert fill_args[0] == selectors.INDICATOR_SEARCH_DIALOG_INPUT

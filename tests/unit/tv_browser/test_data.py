@@ -63,6 +63,13 @@ async def test_list_my_indicators():
     assert result["indicators"][0]["name"].startswith("yt_strategy_")
 
 
+async def test_read_watchlist_warns_when_name_provided():
+    rows = [{"symbol": "BTCUSDT", "price": "50000", "change_pct": "1.2", "change_abs": "600"}]
+    page = _page_with_evaluate(rows)
+    result = await read_watchlist(page, name="my_watchlist")
+    assert any("watchlist-switching" in w for w in result["warnings"])
+
+
 async def test_read_watchlist_raises_dom_shape_changed_on_invalid():
     page = _page_with_evaluate("not a list")
     with pytest.raises(TVDOMShapeChanged):

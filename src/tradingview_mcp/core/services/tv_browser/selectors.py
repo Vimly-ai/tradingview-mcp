@@ -33,6 +33,7 @@ LOGGED_IN_INDICATOR    = 'button[aria-label="Open user menu"]'
 # --- Chart -------------------------------------------------------------------
 MAIN_CHART_CANVAS               = 'div[data-name="pane-main"] canvas'
 TICKER_SEARCH_INPUT             = 'input[data-role="search-input"]'
+INDICATOR_DIALOG_OPEN_BTN       = 'button[data-name="open-indicators"]'
 INDICATOR_SEARCH_DIALOG_INPUT   = 'input[data-name="indicator-search"]'
 INDICATOR_DIALOG_FIRST_RESULT   = 'div[data-name="indicator-result"]:first-child'
 

@@ -41,13 +41,25 @@ async def create_alert(
         await page.fill(selectors.ALERT_DIALOG_MESSAGE_INPUT, message)
     await page.click(selectors.ALERT_DIALOG_CREATE_BTN)
 
+    warnings: list[str] = []
+    if direction != "crossing":
+        warnings.append(
+            f"direction={direction!r} requested but TV dialog mapping not yet "
+            f"wired; alert created with default direction."
+        )
+    if expires is not None:
+        warnings.append(
+            f"expires={expires!r} requested but TV dialog mapping not yet "
+            f"wired; alert created without expiration."
+        )
+
     return {
         "symbol": canon,
         "price": price,
         "direction": direction,
         "message": message,
         "expires": expires,
-        "warnings": [],
+        "warnings": warnings,
     }
 
 

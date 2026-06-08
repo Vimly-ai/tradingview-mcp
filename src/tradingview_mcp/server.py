@@ -973,8 +973,6 @@ def auto_tune_strategy(
 # TV Browser-Control MCP tools (Phase 2)
 # ---------------------------------------------------------------------------
 
-import asyncio as _aio
-
 from tradingview_mcp.core.services.tv_browser import (
     browser as _tv_browser,
     session as _tv_session,
@@ -1047,9 +1045,9 @@ def _translate_tv_exception(e: Exception, tool: str) -> dict:
                         debug_artifacts_path=debug_path, retryable=False)
 
 
-def _tv_run(coro_fn, *, tool: str, require_login: bool = True):
+async def _tv_run(coro_fn, *, tool: str, require_login: bool = True):
     """Common wrapper: lock + throttle + (optionally) require_login + debug_on_failure."""
-    async def _runner():
+    try:
         async with _tv_browser.page_lock() as page:
             await _tv_throttle.throttle()
             if require_login:
@@ -1057,8 +1055,6 @@ def _tv_run(coro_fn, *, tool: str, require_login: bool = True):
             await _tv_modals.dismiss_modals(page)
             async with _tv_debug.debug_on_failure(page, tool):
                 return await coro_fn(page)
-    try:
-        return _aio.run(_runner())
     except Exception as e:
         return _translate_tv_exception(e, tool)
 
@@ -1066,42 +1062,40 @@ def _tv_run(coro_fn, *, tool: str, require_login: bool = True):
 # --- session lifecycle (4) ---
 
 @mcp.tool()
-def tv_login_status() -> dict:
+async def tv_login_status() -> dict:
     """Returns {logged_in: bool}. Never raises TV_NOT_LOGGED_IN."""
     async def _r(page):
         return {"logged_in": await _tv_session.is_logged_in(page), "warnings": []}
-    return _tv_run(_r, tool="tv_login_status", require_login=False)
+    return await _tv_run(_r, tool="tv_login_status", require_login=False)
 
 
 @mcp.tool()
-def tv_open_login_prompt(timeout_s: float = 300) -> dict:
+async def tv_open_login_prompt(timeout_s: float = 300) -> dict:
     """Open a visible login window and wait up to timeout_s for you to sign in."""
     async def _r(page):
         await _tv_session.interactive_login(page, timeout_s=timeout_s)
         return {"logged_in": True, "warnings": []}
-    return _tv_run(_r, tool="tv_open_login_prompt", require_login=False)
+    return await _tv_run(_r, tool="tv_open_login_prompt", require_login=False)
 
 
 @mcp.tool()
-def tv_logout() -> dict:
+async def tv_logout() -> dict:
     """Close the browser and delete the persistent profile (forces fresh login)."""
     try:
-        _aio.run(_tv_session.logout())
+        await _tv_session.logout()
         return {"logged_out": True, "warnings": []}
     except Exception as e:
         return _translate_tv_exception(e, "tv_logout")
 
 
 @mcp.tool()
-def tv_close_browser() -> dict:
+async def tv_close_browser() -> dict:
     """Manually shut down the persistent Chromium instance."""
-    async def _r():
+    try:
         inst = _tv_browser._get_singleton()
         was_alive = await inst.is_alive()
         await inst.shutdown()
         return {"closed": was_alive, "warnings": []}
-    try:
-        return _aio.run(_r())
     except Exception as e:
         return _translate_tv_exception(e, "tv_close_browser")
 
@@ -1109,124 +1103,124 @@ def tv_close_browser() -> dict:
 # --- chart (3) ---
 
 @mcp.tool()
-def tv_open_chart(symbol: str, timeframe: str, indicators: list | None = None) -> dict:
+async def tv_open_chart(symbol: str, timeframe: str, indicators: list | None = None) -> dict:
     """Open a TradingView chart for a symbol/timeframe, optionally adding indicators."""
     async def _r(page):
         return await _tv_chart.open_chart(page, symbol, timeframe, indicators=indicators)
-    return _tv_run(_r, tool="tv_open_chart")
+    return await _tv_run(_r, tool="tv_open_chart")
 
 
 @mcp.tool()
-def tv_screenshot_chart(symbol: str | None = None, timeframe: str | None = None,
-                        region: str = "main") -> dict:
+async def tv_screenshot_chart(symbol: str | None = None, timeframe: str | None = None,
+                               region: str = "main") -> dict:
     """Take a screenshot of the current chart, optionally navigating first."""
     async def _r(page):
         return await _tv_chart.screenshot_chart(page, symbol=symbol, timeframe=timeframe, region=region)
-    return _tv_run(_r, tool="tv_screenshot_chart")
+    return await _tv_run(_r, tool="tv_screenshot_chart")
 
 
 @mcp.tool()
-def tv_add_indicator(name: str) -> dict:
+async def tv_add_indicator(name: str) -> dict:
     """Add a built-in or community indicator to the current chart by name."""
     async def _r(page):
         return await _tv_chart.add_indicator(page, name)
-    return _tv_run(_r, tool="tv_add_indicator")
+    return await _tv_run(_r, tool="tv_add_indicator")
 
 
 # --- data (3) ---
 
 @mcp.tool()
-def tv_read_watchlist(name: str | None = None) -> dict:
+async def tv_read_watchlist(name: str | None = None) -> dict:
     """Read symbols from a TradingView watchlist (default or named)."""
     async def _r(page):
         return await _tv_data.read_watchlist(page, name=name)
-    return _tv_run(_r, tool="tv_read_watchlist")
+    return await _tv_run(_r, tool="tv_read_watchlist")
 
 
 @mcp.tool()
-def tv_read_alerts() -> dict:
+async def tv_read_alerts() -> dict:
     """Read all active price alerts from TradingView."""
     async def _r(page):
         return await _tv_data.read_alerts(page)
-    return _tv_run(_r, tool="tv_read_alerts")
+    return await _tv_run(_r, tool="tv_read_alerts")
 
 
 @mcp.tool()
-def tv_list_my_indicators() -> dict:
+async def tv_list_my_indicators() -> dict:
     """List all Pine Script indicators in your TradingView account."""
     async def _r(page):
         return await _tv_data.list_my_indicators(page)
-    return _tv_run(_r, tool="tv_list_my_indicators")
+    return await _tv_run(_r, tool="tv_list_my_indicators")
 
 
 # --- pine (3) ---
 
 @mcp.tool()
-def tv_paste_pine(code: str | None = None, slug: str | None = None,
-                  name: str | None = None, save: bool = True,
-                  add_to_chart: bool = False) -> dict:
+async def tv_paste_pine(code: str | None = None, slug: str | None = None,
+                        name: str | None = None, save: bool = True,
+                        add_to_chart: bool = False) -> dict:
     """Paste Pine Script code into TradingView's Pine Editor."""
     async def _r(page):
         return await _tv_pine.paste_pine(page, code=code, slug=slug, name=name,
                                           save=save, add_to_chart=add_to_chart)
-    return _tv_run(_r, tool="tv_paste_pine")
+    return await _tv_run(_r, tool="tv_paste_pine")
 
 
 @mcp.tool()
-def tv_save_indicator(name: str, code: str) -> dict:
+async def tv_save_indicator(name: str, code: str) -> dict:
     """Save/overwrite a named Pine Script indicator in TradingView."""
     async def _r(page):
         return await _tv_pine.save_indicator(page, name, code)
-    return _tv_run(_r, tool="tv_save_indicator")
+    return await _tv_run(_r, tool="tv_save_indicator")
 
 
 @mcp.tool()
-def tv_run_strategy_tester(code: str | None = None, slug: str | None = None,
-                            symbol: str | None = None, timeframe: str | None = None) -> dict:
+async def tv_run_strategy_tester(code: str | None = None, slug: str | None = None,
+                                  symbol: str | None = None, timeframe: str | None = None) -> dict:
     """Load Pine code into Strategy Tester and return backtest results."""
     async def _r(page):
         return await _tv_pine.run_strategy_tester(page, code=code, slug=slug,
                                                    symbol=symbol, timeframe=timeframe)
-    return _tv_run(_r, tool="tv_run_strategy_tester")
+    return await _tv_run(_r, tool="tv_run_strategy_tester")
 
 
 # --- alerts (2) ---
 
 @mcp.tool()
-def tv_create_alert(symbol: str, price: float, direction: str = "crossing",
-                     message: str = "", expires: str | None = None) -> dict:
+async def tv_create_alert(symbol: str, price: float, direction: str = "crossing",
+                           message: str = "", expires: str | None = None) -> dict:
     """Create a TradingView price alert for a symbol."""
     async def _r(page):
         return await _tv_alerts.create_alert(page, symbol, price=price,
                                               direction=direction, message=message,
                                               expires=expires)
-    return _tv_run(_r, tool="tv_create_alert")
+    return await _tv_run(_r, tool="tv_create_alert")
 
 
 @mcp.tool()
-def tv_delete_alert(alert_id: str) -> dict:
+async def tv_delete_alert(alert_id: str) -> dict:
     """Delete a TradingView alert by its ID."""
     async def _r(page):
         return await _tv_alerts.delete_alert(page, alert_id)
-    return _tv_run(_r, tool="tv_delete_alert")
+    return await _tv_run(_r, tool="tv_delete_alert")
 
 
 # --- watchlists (2) ---
 
 @mcp.tool()
-def tv_add_to_watchlist(symbol: str, watchlist_name: str | None = None) -> dict:
+async def tv_add_to_watchlist(symbol: str, watchlist_name: str | None = None) -> dict:
     """Add a symbol to a TradingView watchlist."""
     async def _r(page):
         return await _tv_watchlists.add_to_watchlist(page, symbol, watchlist_name=watchlist_name)
-    return _tv_run(_r, tool="tv_add_to_watchlist")
+    return await _tv_run(_r, tool="tv_add_to_watchlist")
 
 
 @mcp.tool()
-def tv_remove_from_watchlist(symbol: str, watchlist_name: str | None = None) -> dict:
+async def tv_remove_from_watchlist(symbol: str, watchlist_name: str | None = None) -> dict:
     """Remove a symbol from a TradingView watchlist."""
     async def _r(page):
         return await _tv_watchlists.remove_from_watchlist(page, symbol, watchlist_name=watchlist_name)
-    return _tv_run(_r, tool="tv_remove_from_watchlist")
+    return await _tv_run(_r, tool="tv_remove_from_watchlist")
 
 
 # ── Resource ───────────────────────────────────────────────────────────────────

@@ -87,6 +87,8 @@ async def screenshot_chart(
 
 async def add_indicator(page: Any, name: str) -> dict:
     """Open the indicator dialog, search by name, click first result."""
+    await page.click(selectors.INDICATOR_DIALOG_OPEN_BTN)
+    await page.wait_for_selector(selectors.INDICATOR_SEARCH_DIALOG_INPUT, timeout=5_000)
     await page.fill(selectors.INDICATOR_SEARCH_DIALOG_INPUT, name)
     await page.click(selectors.INDICATOR_DIALOG_FIRST_RESULT)
     return {"indicator": name, "warnings": []}
