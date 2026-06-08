@@ -13,19 +13,59 @@ from .exceptions import TVSessionExpired, TVLoginTimeout
 from .selectors import LOGGED_IN_INDICATOR, LOGIN_URL, _TV_BASE
 
 
+_USER_MENU_SELECTOR_CANDIDATES = (
+    LOGGED_IN_INDICATOR,
+    'button[aria-label*="user menu" i]',
+    'button[aria-label*="account" i]',
+    '[data-name="header-user-menu-button"]',
+    'button.tv-header__user-menu-button',
+    '[class*="userMenuButton"]',
+)
+
+
 async def is_logged_in(page: Any, timeout_s: float = 2.0) -> bool:
-    """True if LOGGED_IN_INDICATOR is visible within *timeout_s*.
+    """True if the current page shows a logged-in TradingView session.
+
+    Strategy (most reliable first):
+    1. Check for a non-empty ``sessionid`` cookie on a ``.tradingview.com``
+       domain. This is the canonical "logged in" signal and survives DOM
+       redesigns.
+    2. If that's absent, fall back to any of several known user-menu DOM
+       selectors (TV ships subtle variations across redesigns).
 
     Navigates to tradingview.com first if the page is currently elsewhere
-    (otherwise the selector lookup would spuriously fail).
+    (so cookie lookup and selector matching work against the right context).
     """
     try:
         if "tradingview.com" not in (page.url or "") and "127.0.0.1" not in (page.url or ""):
             await page.goto(_TV_BASE, wait_until="domcontentloaded")
-        await page.locator(LOGGED_IN_INDICATOR).wait_for(
-            state="visible", timeout=int(timeout_s * 1000)
-        )
-        return True
+
+        # Method 1: cookie-based (most reliable)
+        try:
+            cookies = await page.context.cookies()
+        except Exception:
+            cookies = []
+        for c in cookies:
+            if not isinstance(c, dict):
+                continue
+            if c.get("name") != "sessionid":
+                continue
+            domain = (c.get("domain") or "").lower()
+            if "tradingview.com" in domain and c.get("value"):
+                return True
+
+        # Method 2: try multiple known user-menu selectors
+        per_selector_timeout = max(200, int(timeout_s * 1000 / max(1, len(_USER_MENU_SELECTOR_CANDIDATES))))
+        for sel in _USER_MENU_SELECTOR_CANDIDATES:
+            try:
+                await page.locator(sel).first.wait_for(
+                    state="visible", timeout=per_selector_timeout
+                )
+                return True
+            except Exception:
+                continue
+
+        return False
     except Exception:
         return False
 

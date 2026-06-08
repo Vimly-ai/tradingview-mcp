@@ -18,19 +18,35 @@ from tradingview_mcp.core.services.tv_browser.exceptions import (
 )
 
 
-def _mock_page(url: str = "https://www.tradingview.com/chart/"):
+def _mock_page(url: str = "https://www.tradingview.com/chart/", cookies=None):
+    """Build a page mock. By default no cookies → forces selector fallback."""
     page = MagicMock()
     page.url = url
     page.goto = AsyncMock()
+    # context.cookies() returns whatever the test wants; default empty list
+    page.context = MagicMock()
+    page.context.cookies = AsyncMock(return_value=cookies or [])
     locator = MagicMock()
     locator.wait_for = AsyncMock()
+    # .first chains: page.locator(sel).first.wait_for(...)
+    locator.first = locator
     page.locator = MagicMock(return_value=locator)
     return page, locator
 
 
 async def test_is_logged_in_true_when_indicator_visible():
+    # No cookies → selector path matches → True
     page, locator = _mock_page()
     locator.wait_for = AsyncMock()  # resolves -> visible
+    assert await is_logged_in(page) is True
+
+
+async def test_is_logged_in_true_when_session_cookie_present():
+    cookies = [{"name": "sessionid", "value": "abc123",
+                "domain": ".tradingview.com", "path": "/"}]
+    page, locator = _mock_page(cookies=cookies)
+    # Selector lookup should NEVER be needed when cookies signal logged-in.
+    locator.wait_for = AsyncMock(side_effect=Exception("should not be reached"))
     assert await is_logged_in(page) is True
 
 
@@ -62,11 +78,16 @@ async def test_interactive_login_times_out():
         await interactive_login(page, timeout_s=0.5, poll_s=0.1)
 
 
-async def test_interactive_login_succeeds_when_indicator_appears():
+async def test_interactive_login_succeeds_when_cookie_appears():
     page, locator = _mock_page()
-    locator.wait_for = AsyncMock(side_effect=[
-        Exception("not yet"), Exception("not yet"), None,
+    # No cookies on first 2 polls, sessionid cookie on 3rd
+    page.context.cookies = AsyncMock(side_effect=[
+        [],
+        [],
+        [{"name": "sessionid", "value": "x", "domain": ".tradingview.com"}],
     ])
+    # Selectors always fail to avoid masking the cookie test
+    locator.wait_for = AsyncMock(side_effect=Exception("selector miss"))
     await interactive_login(page, timeout_s=2.0, poll_s=0.05)
 
 
