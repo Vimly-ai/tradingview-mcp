@@ -356,6 +356,31 @@ Strategy code runs in a hardened subprocess: AST scan rejects forbidden imports/
 
 ---
 
+### TV Browser Control (Phase 2)
+
+Seventeen tools that drive a persistent logged-in Chromium for visual chart analysis, scraping your private TV data, and pasting Phase 1's Pine strategies into TV's own Pine Editor / Strategy Tester.
+
+**Lifecycle:** one Chromium per MCP-server lifetime; auto-closes after 5 minutes idle. First use of any auth-required tool returns `TV_NOT_LOGGED_IN` — call `tv_open_login_prompt()` and a visible window opens for you to sign in (up to 5 min). Cookies persist under `~/.tradingview_mcp_data/browser/` until TV invalidates the session (~30 days).
+
+**Tools:**
+
+| Surface | Tools |
+|---|---|
+| Session | `tv_login_status`, `tv_open_login_prompt`, `tv_logout`, `tv_close_browser` |
+| Chart | `tv_open_chart`, `tv_screenshot_chart`, `tv_add_indicator` |
+| Read data | `tv_read_watchlist`, `tv_read_alerts`, `tv_list_my_indicators` |
+| Pine | `tv_paste_pine`, `tv_save_indicator`, `tv_run_strategy_tester` |
+| Alerts (price-cross MVP) | `tv_create_alert`, `tv_delete_alert` |
+| Watchlists | `tv_add_to_watchlist`, `tv_remove_from_watchlist` |
+
+The Phase 1 → Phase 2 loop: `run_strategy_backtest(...)` produces a `slug`; pass that slug to `tv_run_strategy_tester(slug=...)` and TV runs the same Pine against TV's Strategy Tester, returning net profit, max drawdown, # trades, sharpe + a screenshot of the report.
+
+Env vars: `TV_BASE_URL`, `TV_BROWSER_USER_DATA_DIR`, `TV_BROWSER_HEADLESS`, `TV_BROWSER_IDLE_S`, `TV_BROWSER_MIN_INTERVAL_MS`, `TV_BROWSER_DEBUG_TRACES`, `TV_BROWSER_DEBUG_MAX`.
+
+Full design: `docs/superpowers/specs/2026-06-04-tv-browser-control-design.md`.
+
+---
+
 ### 💰 Yahoo Finance — Real-Time Prices *(New in v0.6.0)*
 
 | Tool | Description |

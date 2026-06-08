@@ -64,6 +64,21 @@ class ErrorCode(str, Enum):
     # YouTube / transcript
     TRANSCRIPT_UNAVAILABLE = "TRANSCRIPT_UNAVAILABLE"
 
+    # TV browser-control errors (Phase 2)
+    TV_NOT_LOGGED_IN = "TV_NOT_LOGGED_IN"
+    TV_LOGIN_TIMEOUT = "TV_LOGIN_TIMEOUT"
+    TV_BROWSER_DEAD = "TV_BROWSER_DEAD"
+    TV_SELECTOR_NOT_FOUND = "TV_SELECTOR_NOT_FOUND"
+    TV_CLICK_INTERCEPTED = "TV_CLICK_INTERCEPTED"
+    TV_NAVIGATION_FAILED = "TV_NAVIGATION_FAILED"
+    TV_PINE_COMPILE_ERROR = "TV_PINE_COMPILE_ERROR"
+    TV_LIMIT_REACHED = "TV_LIMIT_REACHED"
+    TV_SUBSCRIPTION_REQUIRED = "TV_SUBSCRIPTION_REQUIRED"
+    TV_RATE_LIMITED = "TV_RATE_LIMITED"
+    TV_CAPTCHA_CHALLENGE = "TV_CAPTCHA_CHALLENGE"
+    TV_DOM_SHAPE_CHANGED = "TV_DOM_SHAPE_CHANGED"
+    TV_UNEXPECTED_STATE = "TV_UNEXPECTED_STATE"
+
 
 def make_error(code: Union[ErrorCode, str], message: str, **extra: Any) -> dict[str, Any]:
     """Construct a structured error envelope.
@@ -129,6 +144,85 @@ class BatchExecutionError(Exception):
         self.batches_attempted = batches_attempted
         self.batches_failed = batches_failed
         self.first_error = first_error
+
+
+_TV_BROWSER_DEFAULT_HINTS: dict[str, str] = {
+    "TV_NOT_LOGGED_IN": (
+        "TradingView session not active. Call tv_open_login_prompt() to start "
+        "the login flow."
+    ),
+    "TV_LOGIN_TIMEOUT": (
+        "Login window timed out. Call tv_open_login_prompt() to try again."
+    ),
+    "TV_BROWSER_DEAD": (
+        "Chromium could not be restarted. Inspect debug_artifacts_path; you "
+        "may need to delete ~/.tradingview_mcp_data/browser/ if the profile "
+        "is corrupt."
+    ),
+    "TV_SELECTOR_NOT_FOUND": (
+        "TradingView may have changed the DOM. Check "
+        "tv_browser/selectors.py and the debug screenshot."
+    ),
+    "TV_CLICK_INTERCEPTED": (
+        "An undocumented overlay is blocking the click. Manual intervention "
+        "may be needed."
+    ),
+    "TV_NAVIGATION_FAILED": (
+        "Page navigation failed. Check network connection or tradingview.com "
+        "status."
+    ),
+    "TV_PINE_COMPILE_ERROR": (
+        "Pine script did not compile. Fix the code and retry; the strategy "
+        "was NOT saved."
+    ),
+    "TV_LIMIT_REACHED": (
+        "TradingView refused due to a plan ceiling. Delete an existing "
+        "alert/indicator to free a slot."
+    ),
+    "TV_SUBSCRIPTION_REQUIRED": (
+        "This feature requires a paid TradingView plan."
+    ),
+    "TV_RATE_LIMITED": (
+        "TradingView rate-limited the request. Wait and retry."
+    ),
+    "TV_CAPTCHA_CHALLENGE": (
+        "A captcha appeared in the visible browser. Solve it then retry."
+    ),
+    "TV_DOM_SHAPE_CHANGED": (
+        "Scraper found the panel but couldn't extract expected fields. "
+        "TV may have changed the panel structure."
+    ),
+    "TV_UNEXPECTED_STATE": (
+        "Page is in a state we didn't anticipate. Inspect debug artifacts."
+    ),
+}
+
+
+def make_tv_browser_error(
+    code: ErrorCode | str,
+    message: str,
+    tool: str | None = None,
+    debug_artifacts_path: str | None = None,
+    retryable: bool = False,
+    hint: str | None = None,
+    **extra: Any,
+) -> dict[str, Any]:
+    """Construct a tv_browser-error envelope.
+
+    Adds ``error_type="tv_browser"`` to the inner dict so the assistant
+    can branch on category. Fills in a default hint when none is supplied.
+    """
+    code_str = code.value if isinstance(code, ErrorCode) else str(code)
+    return make_error(
+        code,
+        message,
+        error_type="tv_browser",
+        tool=tool,
+        debug_artifacts_path=debug_artifacts_path,
+        retryable=retryable,
+        hint=hint if hint is not None else _TV_BROWSER_DEFAULT_HINTS.get(code_str, ""),
+        **extra,
+    )
 
 
 _STRATEGY_DEFAULT_HINTS: dict[str, str] = {

@@ -969,6 +969,260 @@ def auto_tune_strategy(
         return make_error(ErrorCode.INVALID_PARAMETER, str(e))
 
 
+# ---------------------------------------------------------------------------
+# TV Browser-Control MCP tools (Phase 2)
+# ---------------------------------------------------------------------------
+
+from tradingview_mcp.core.services.tv_browser import (
+    browser as _tv_browser,
+    session as _tv_session,
+    chart as _tv_chart,
+    data as _tv_data,
+    pine as _tv_pine,
+    alerts as _tv_alerts,
+    watchlists as _tv_watchlists,
+    debug as _tv_debug,
+    throttle as _tv_throttle,
+    modals as _tv_modals,
+)
+from tradingview_mcp.core.services.tv_browser.exceptions import (
+    TVSessionExpired, TVLoginTimeout, TVBrowserDead,
+    TVRateLimit, TVCaptchaChallenge, TVSubscriptionRequired,
+    TVLimitReached, TVClickIntercepted, TVDOMShapeChanged,
+    TVPineCompileError,
+)
+from tradingview_mcp.core.errors import make_tv_browser_error as _make_tv_err
+
+
+def _translate_tv_exception(e: Exception, tool: str) -> dict:
+    """Map a tv_browser exception to a make_tv_browser_error envelope."""
+    debug_path = getattr(e, "debug_artifacts_path", None)
+    if isinstance(e, TVSessionExpired):
+        return _make_tv_err(ErrorCode.TV_NOT_LOGGED_IN, str(e), tool=tool,
+                            debug_artifacts_path=debug_path, retryable=True)
+    if isinstance(e, TVLoginTimeout):
+        return _make_tv_err(ErrorCode.TV_LOGIN_TIMEOUT, str(e), tool=tool,
+                            debug_artifacts_path=debug_path, retryable=True)
+    if isinstance(e, TVBrowserDead):
+        return _make_tv_err(ErrorCode.TV_BROWSER_DEAD, str(e), tool=tool,
+                            debug_artifacts_path=debug_path, retryable=False)
+    if isinstance(e, TVPineCompileError):
+        return _make_tv_err(ErrorCode.TV_PINE_COMPILE_ERROR, str(e), tool=tool,
+                            debug_artifacts_path=debug_path, retryable=True,
+                            pine_error_text=e.full_text, line=e.line)
+    if isinstance(e, TVDOMShapeChanged):
+        return _make_tv_err(ErrorCode.TV_DOM_SHAPE_CHANGED, str(e), tool=tool,
+                            debug_artifacts_path=debug_path, retryable=False,
+                            panel=e.panel)
+    if isinstance(e, TVRateLimit):
+        return _make_tv_err(ErrorCode.TV_RATE_LIMITED, str(e), tool=tool,
+                            debug_artifacts_path=debug_path, retryable=True,
+                            retry_after_s=e.retry_after_s)
+    if isinstance(e, TVCaptchaChallenge):
+        return _make_tv_err(ErrorCode.TV_CAPTCHA_CHALLENGE, str(e), tool=tool,
+                            debug_artifacts_path=debug_path, retryable=True)
+    if isinstance(e, TVSubscriptionRequired):
+        return _make_tv_err(ErrorCode.TV_SUBSCRIPTION_REQUIRED, str(e), tool=tool,
+                            debug_artifacts_path=debug_path, retryable=False)
+    if isinstance(e, TVLimitReached):
+        return _make_tv_err(ErrorCode.TV_LIMIT_REACHED, str(e), tool=tool,
+                            debug_artifacts_path=debug_path, retryable=False)
+    if isinstance(e, TVClickIntercepted):
+        return _make_tv_err(ErrorCode.TV_CLICK_INTERCEPTED, str(e), tool=tool,
+                            debug_artifacts_path=debug_path, retryable=True)
+    msg = str(e)
+    if "Timeout" in type(e).__name__ or "waiting for selector" in msg.lower():
+        return _make_tv_err(ErrorCode.TV_SELECTOR_NOT_FOUND, msg, tool=tool,
+                            debug_artifacts_path=debug_path, retryable=False)
+    if any(s in msg for s in ("ERR_NETWORK", "ERR_TIMED_OUT", "ERR_DNS", "NS_ERROR")):
+        return _make_tv_err(ErrorCode.TV_NAVIGATION_FAILED, msg, tool=tool,
+                            debug_artifacts_path=debug_path, retryable=True)
+    if isinstance(e, ValueError):
+        return make_error(ErrorCode.INVALID_PARAMETER, str(e))
+    if isinstance(e, FileNotFoundError):
+        return make_error(ErrorCode.NO_DATA, str(e))
+    return _make_tv_err(ErrorCode.TV_UNEXPECTED_STATE, msg, tool=tool,
+                        debug_artifacts_path=debug_path, retryable=False)
+
+
+async def _tv_run(coro_fn, *, tool: str, require_login: bool = True):
+    """Common wrapper: lock + throttle + (optionally) require_login + debug_on_failure."""
+    try:
+        async with _tv_browser.page_lock() as page:
+            await _tv_throttle.throttle()
+            if require_login:
+                await _tv_session.require_login(page)
+            await _tv_modals.dismiss_modals(page)
+            async with _tv_debug.debug_on_failure(page, tool):
+                return await coro_fn(page)
+    except Exception as e:
+        return _translate_tv_exception(e, tool)
+
+
+# --- session lifecycle (4) ---
+
+@mcp.tool()
+async def tv_login_status() -> dict:
+    """Returns {logged_in: bool}. Never raises TV_NOT_LOGGED_IN."""
+    async def _r(page):
+        return {"logged_in": await _tv_session.is_logged_in(page), "warnings": []}
+    return await _tv_run(_r, tool="tv_login_status", require_login=False)
+
+
+@mcp.tool()
+async def tv_open_login_prompt(timeout_s: float = 300) -> dict:
+    """Open a visible login window and wait up to timeout_s for you to sign in."""
+    async def _r(page):
+        await _tv_session.interactive_login(page, timeout_s=timeout_s)
+        return {"logged_in": True, "warnings": []}
+    return await _tv_run(_r, tool="tv_open_login_prompt", require_login=False)
+
+
+@mcp.tool()
+async def tv_logout() -> dict:
+    """Close the browser and delete the persistent profile (forces fresh login)."""
+    try:
+        await _tv_session.logout()
+        return {"logged_out": True, "warnings": []}
+    except Exception as e:
+        return _translate_tv_exception(e, "tv_logout")
+
+
+@mcp.tool()
+async def tv_close_browser() -> dict:
+    """Manually shut down the persistent Chromium instance."""
+    try:
+        inst = _tv_browser._get_singleton()
+        was_alive = await inst.is_alive()
+        await inst.shutdown()
+        return {"closed": was_alive, "warnings": []}
+    except Exception as e:
+        return _translate_tv_exception(e, "tv_close_browser")
+
+
+# --- chart (3) ---
+
+@mcp.tool()
+async def tv_open_chart(symbol: str, timeframe: str, indicators: list | None = None) -> dict:
+    """Open a TradingView chart for a symbol/timeframe, optionally adding indicators."""
+    async def _r(page):
+        return await _tv_chart.open_chart(page, symbol, timeframe, indicators=indicators)
+    return await _tv_run(_r, tool="tv_open_chart")
+
+
+@mcp.tool()
+async def tv_screenshot_chart(symbol: str | None = None, timeframe: str | None = None,
+                               region: str = "main") -> dict:
+    """Take a screenshot of the current chart, optionally navigating first."""
+    async def _r(page):
+        return await _tv_chart.screenshot_chart(page, symbol=symbol, timeframe=timeframe, region=region)
+    return await _tv_run(_r, tool="tv_screenshot_chart")
+
+
+@mcp.tool()
+async def tv_add_indicator(name: str) -> dict:
+    """Add a built-in or community indicator to the current chart by name."""
+    async def _r(page):
+        return await _tv_chart.add_indicator(page, name)
+    return await _tv_run(_r, tool="tv_add_indicator")
+
+
+# --- data (3) ---
+
+@mcp.tool()
+async def tv_read_watchlist(name: str | None = None) -> dict:
+    """Read symbols from a TradingView watchlist (default or named)."""
+    async def _r(page):
+        return await _tv_data.read_watchlist(page, name=name)
+    return await _tv_run(_r, tool="tv_read_watchlist")
+
+
+@mcp.tool()
+async def tv_read_alerts() -> dict:
+    """Read all active price alerts from TradingView."""
+    async def _r(page):
+        return await _tv_data.read_alerts(page)
+    return await _tv_run(_r, tool="tv_read_alerts")
+
+
+@mcp.tool()
+async def tv_list_my_indicators() -> dict:
+    """List all Pine Script indicators in your TradingView account."""
+    async def _r(page):
+        return await _tv_data.list_my_indicators(page)
+    return await _tv_run(_r, tool="tv_list_my_indicators")
+
+
+# --- pine (3) ---
+
+@mcp.tool()
+async def tv_paste_pine(code: str | None = None, slug: str | None = None,
+                        name: str | None = None, save: bool = True,
+                        add_to_chart: bool = False) -> dict:
+    """Paste Pine Script code into TradingView's Pine Editor."""
+    async def _r(page):
+        return await _tv_pine.paste_pine(page, code=code, slug=slug, name=name,
+                                          save=save, add_to_chart=add_to_chart)
+    return await _tv_run(_r, tool="tv_paste_pine")
+
+
+@mcp.tool()
+async def tv_save_indicator(name: str, code: str) -> dict:
+    """Save/overwrite a named Pine Script indicator in TradingView."""
+    async def _r(page):
+        return await _tv_pine.save_indicator(page, name, code)
+    return await _tv_run(_r, tool="tv_save_indicator")
+
+
+@mcp.tool()
+async def tv_run_strategy_tester(code: str | None = None, slug: str | None = None,
+                                  symbol: str | None = None, timeframe: str | None = None) -> dict:
+    """Load Pine code into Strategy Tester and return backtest results."""
+    async def _r(page):
+        return await _tv_pine.run_strategy_tester(page, code=code, slug=slug,
+                                                   symbol=symbol, timeframe=timeframe)
+    return await _tv_run(_r, tool="tv_run_strategy_tester")
+
+
+# --- alerts (2) ---
+
+@mcp.tool()
+async def tv_create_alert(symbol: str, price: float, direction: str = "crossing",
+                           message: str = "", expires: str | None = None) -> dict:
+    """Create a TradingView price alert for a symbol."""
+    async def _r(page):
+        return await _tv_alerts.create_alert(page, symbol, price=price,
+                                              direction=direction, message=message,
+                                              expires=expires)
+    return await _tv_run(_r, tool="tv_create_alert")
+
+
+@mcp.tool()
+async def tv_delete_alert(alert_id: str) -> dict:
+    """Delete a TradingView alert by its ID."""
+    async def _r(page):
+        return await _tv_alerts.delete_alert(page, alert_id)
+    return await _tv_run(_r, tool="tv_delete_alert")
+
+
+# --- watchlists (2) ---
+
+@mcp.tool()
+async def tv_add_to_watchlist(symbol: str, watchlist_name: str | None = None) -> dict:
+    """Add a symbol to a TradingView watchlist."""
+    async def _r(page):
+        return await _tv_watchlists.add_to_watchlist(page, symbol, watchlist_name=watchlist_name)
+    return await _tv_run(_r, tool="tv_add_to_watchlist")
+
+
+@mcp.tool()
+async def tv_remove_from_watchlist(symbol: str, watchlist_name: str | None = None) -> dict:
+    """Remove a symbol from a TradingView watchlist."""
+    async def _r(page):
+        return await _tv_watchlists.remove_from_watchlist(page, symbol, watchlist_name=watchlist_name)
+    return await _tv_run(_r, tool="tv_remove_from_watchlist")
+
+
 # ── Resource ───────────────────────────────────────────────────────────────────
 
 @mcp.resource("exchanges://list")
